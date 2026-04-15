@@ -7,7 +7,7 @@
     "build": "tsc"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
+    "@anthropic-ai/sdk": "^0.80.0",
     "dotenv": "^16.4.7",
     "grammy": "^1.35.0"
   },
