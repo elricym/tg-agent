@@ -4,7 +4,12 @@
   "type": "module",
   "scripts": {
     "dev": "npx tsx src/index.ts",
-    "build": "tsc"
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:restart": "pm2 restart tg-agent",
+    "pm2:stop": "pm2 stop tg-agent",
+    "pm2:logs": "pm2 logs tg-agent"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
