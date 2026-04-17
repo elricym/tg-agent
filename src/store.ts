@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import type { MessageParam } from "@anthropic-ai/sdk/resources/messages.js";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 const db = new DatabaseSync("conversations.db");
 
@@ -148,38 +148,39 @@ const countSessionMsgStmt = db.prepare(
   "SELECT COUNT(*) as count FROM messages WHERE session_id = ?"
 );
 
-export function addMessage(
-  chatId: number,
-  role: string,
-  content: MessageParam["content"]
-): void {
+export function addAgentMessage(chatId: number, message: AgentMessage): void {
   const session = getOrCreateSession(chatId);
-  insertStmt.run(chatId, session.id, role, JSON.stringify(content));
+  // content_json holds the entire AgentMessage (role + content + metadata)
+  // so multi-turn tool chains round-trip without losing context.
+  insertStmt.run(chatId, session.id, message.role, JSON.stringify(message));
   touchSessionStmt.run(session.id);
 }
 
-export function getHistory(
-  chatId: number,
-  limit: number
-): MessageParam[] {
+export function getAgentHistory(chatId: number, limit: number): AgentMessage[] {
   const session = getOrCreateSession(chatId);
   const rows = selectStmt.all(chatId, session.id, limit) as {
     role: string;
     content_json: string;
   }[];
-  const all: MessageParam[] = rows.reverse().map((r) => ({
-    role: r.role as MessageParam["role"],
-    content: JSON.parse(r.content_json),
-  }));
+
+  // Parse and drop any legacy rows whose JSON isn't a full AgentMessage
+  // (older format stored just content, not the wrapped message object).
+  const all: AgentMessage[] = [];
+  for (const r of rows.reverse()) {
+    try {
+      const parsed = JSON.parse(r.content_json);
+      if (parsed && typeof parsed === "object" && "role" in parsed) {
+        all.push(parsed as AgentMessage);
+      }
+    } catch {
+      // malformed row — skip
+    }
+  }
 
   // If truncation cut mid tool-chain, drop leading messages until the
-  // first one is a plain-text user turn. Orphan tool_results would 400.
+  // first turn is a user message. Orphan toolResults would break the API.
   let start = 0;
-  while (start < all.length) {
-    const m = all[start];
-    if (m.role === "user" && typeof m.content === "string") break;
-    start++;
-  }
+  while (start < all.length && all[start].role !== "user") start++;
   return all.slice(start);
 }
 

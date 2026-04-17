@@ -1,8 +1,8 @@
 import { Bot } from "grammy";
 import { config, validateConfig } from "./config.js";
 import {
-  addMessage,
-  getHistory,
+  addAgentMessage,
+  getAgentHistory,
   clearHistory,
   createNewSession,
   switchSession,
@@ -11,7 +11,8 @@ import {
   getOrCreateSession,
   getStats,
 } from "./store.js";
-import { runAgent, type ProgressEvent } from "./agent.js";
+import { runAgent } from "./agent.js";
+import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { checkRateLimit } from "./safety.js";
 
 validateConfig();
@@ -185,8 +186,6 @@ bot.on("message:text", async (ctx) => {
   // Auto-create session if needed
   const session = getOrCreateSession(chatId);
 
-  addMessage(chatId, "user", userText);
-
   const typingInterval = setInterval(() => {
     ctx.api.sendChatAction(chatId, "typing").catch(() => {});
   }, 4000);
@@ -209,27 +208,26 @@ bot.on("message:text", async (ctx) => {
     }
   };
 
-  const onProgress = async (e: ProgressEvent) => {
-    if (e.type === "tool_use") {
-      await setStatus(`🔧 ${e.name}(${summarizeToolInput(e.name, e.input)})`);
-    } else if (e.type === "max_rounds") {
-      await setStatus("⚠️ Reached max tool rounds.");
-    } else if (e.type === "error") {
-      await setStatus(`❌ ${e.message}`);
+  const onEvent = async (e: AgentEvent) => {
+    if (e.type === "tool_execution_start") {
+      await setStatus(`🔧 ${e.toolName}(${summarizeToolInput(e.toolName, e.args)})`);
+    } else if (e.type === "tool_execution_end" && e.isError) {
+      await setStatus(`❌ ${e.toolName} failed`);
     }
   };
 
   try {
-    const history = getHistory(chatId, config.maxHistory);
-    const result = await runAgent(history, { onProgress });
+    const history = getAgentHistory(chatId, config.maxHistory);
+    const result = await runAgent(history, userText, { onEvent });
 
-    // Persist the full assistant + tool_result chain so future turns
-    // retain tool context, not just the final text.
+    // Persist all messages appended during this run — user prompt,
+    // assistant turns, and tool results — so future turns retain full
+    // tool-chain context, not just the final text.
     for (const msg of result.newMessages) {
-      addMessage(chatId, msg.role, msg.content);
+      addAgentMessage(chatId, msg);
     }
 
-    if (session.title === "New Chat" && history.length <= 1) {
+    if (session.title === "New Chat" && history.length === 0) {
       const shortTitle =
         userText.length > 30 ? userText.slice(0, 30) + "…" : userText;
       setSessionTitle(session.id, shortTitle);
