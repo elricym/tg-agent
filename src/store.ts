@@ -167,10 +167,20 @@ export function getHistory(
     role: string;
     content_json: string;
   }[];
-  return rows.reverse().map((r) => ({
+  const all: MessageParam[] = rows.reverse().map((r) => ({
     role: r.role as MessageParam["role"],
     content: JSON.parse(r.content_json),
   }));
+
+  // If truncation cut mid tool-chain, drop leading messages until the
+  // first one is a plain-text user turn. Orphan tool_results would 400.
+  let start = 0;
+  while (start < all.length) {
+    const m = all[start];
+    if (m.role === "user" && typeof m.content === "string") break;
+    start++;
+  }
+  return all.slice(start);
 }
 
 export function clearHistory(chatId: number): void {
