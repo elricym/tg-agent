@@ -9,7 +9,8 @@
     "pm2:start": "pm2 start ecosystem.config.cjs",
     "pm2:restart": "pm2 restart tg-agent",
     "pm2:stop": "pm2 stop tg-agent",
-    "pm2:logs": "pm2 logs tg-agent"
+    "pm2:logs": "pm2 logs tg-agent",
+    "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",

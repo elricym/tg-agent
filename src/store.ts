@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-const db = new DatabaseSync("conversations.db");
+const db = new DatabaseSync(process.env.DB_PATH || "conversations.db");
 
 // ── Schema ────────────────────────────────────────────────────
 
