@@ -1,8 +1,8 @@
 import { Bot } from "grammy";
 import { config, validateConfig } from "./config.js";
 import {
-  addMessage,
-  getHistory,
+  addAgentMessage,
+  getAgentHistory,
   clearHistory,
   createNewSession,
   switchSession,
@@ -12,6 +12,7 @@ import {
   getStats,
 } from "./store.js";
 import { runAgent } from "./agent.js";
+import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { checkRateLimit } from "./safety.js";
 
 validateConfig();
@@ -21,6 +22,14 @@ const startTime = Date.now();
 
 function isAllowed(userId: number): boolean {
   return config.allowedUsers.includes(String(userId));
+}
+
+function summarizeToolInput(name: string, input: Record<string, unknown>): string {
+  if (name === "shell") return String(input.command ?? "").slice(0, 80);
+  if (name === "read_file" || name === "write_file") return String(input.path ?? "");
+  if (name === "acp") return String(input.task ?? "").slice(0, 80);
+  const json = JSON.stringify(input);
+  return json.length > 80 ? json.slice(0, 80) + "…" : json;
 }
 
 function splitMessage(text: string, maxLen = 4096): string[] {
@@ -177,32 +186,67 @@ bot.on("message:text", async (ctx) => {
   // Auto-create session if needed
   const session = getOrCreateSession(chatId);
 
-  addMessage(chatId, "user", userText);
-
   const typingInterval = setInterval(() => {
     ctx.api.sendChatAction(chatId, "typing").catch(() => {});
   }, 4000);
   await ctx.api.sendChatAction(chatId, "typing").catch(() => {});
 
+  let statusMsgId: number | null = null;
+  let lastStatusText = "";
+  const setStatus = async (text: string) => {
+    if (text === lastStatusText) return;
+    lastStatusText = text;
+    try {
+      if (statusMsgId === null) {
+        const m = await ctx.reply(text);
+        statusMsgId = m.message_id;
+      } else {
+        await ctx.api.editMessageText(chatId, statusMsgId, text);
+      }
+    } catch {
+      // editing can fail (e.g. identical content, message gone) — ignore
+    }
+  };
+
+  const onEvent = async (e: AgentEvent) => {
+    if (e.type === "tool_execution_start") {
+      await setStatus(`🔧 ${e.toolName}(${summarizeToolInput(e.toolName, e.args)})`);
+    } else if (e.type === "tool_execution_end" && e.isError) {
+      await setStatus(`❌ ${e.toolName} failed`);
+    }
+  };
+
   try {
-    const history = getHistory(chatId, config.maxHistory);
-    const reply = await runAgent(history);
+    const history = getAgentHistory(chatId, config.maxHistory);
+    const result = await runAgent(history, userText, { onEvent });
 
-    addMessage(chatId, "assistant", reply);
+    // Persist all messages appended during this run — user prompt,
+    // assistant turns, and tool results — so future turns retain full
+    // tool-chain context, not just the final text.
+    for (const msg of result.newMessages) {
+      addAgentMessage(chatId, msg);
+    }
 
-    // Auto-title: if session is new and title is "New Chat", generate title from first exchange
-    if (session.title === "New Chat" && history.length <= 2) {
+    if (session.title === "New Chat" && history.length === 0) {
       const shortTitle =
         userText.length > 30 ? userText.slice(0, 30) + "…" : userText;
       setSessionTitle(session.id, shortTitle);
     }
 
-    const parts = splitMessage(reply);
+    if (statusMsgId !== null) {
+      await ctx.api.deleteMessage(chatId, statusMsgId).catch(() => {});
+      statusMsgId = null;
+    }
+
+    const parts = splitMessage(result.text);
     for (const part of parts) {
       await ctx.reply(part);
     }
   } catch (err) {
     console.error("Agent error:", err);
+    if (statusMsgId !== null) {
+      await ctx.api.deleteMessage(chatId, statusMsgId).catch(() => {});
+    }
     await ctx.reply("Sorry, an error occurred while processing your message.");
   } finally {
     clearInterval(typingInterval);

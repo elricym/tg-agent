@@ -1,41 +1,34 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
+import { Type, type Static } from "@sinclair/typebox";
+import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { isPathAllowed } from "../safety.js";
-import type { ToolHandler } from "./registry.js";
 
-export const writeFileTool: ToolHandler = {
-  definition: {
-    name: "write_file",
-    description:
-      "Write content to a file. Path must be within allowed directories. Sensitive paths are blocked.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        path: {
-          type: "string",
-          description: "Absolute or relative file path to write",
-        },
-        content: {
-          type: "string",
-          description: "Content to write to the file",
-        },
-      },
-      required: ["path", "content"],
-    },
-  },
-  execute: async (input) => {
-    const filePath = input.path as string;
+const Params = Type.Object({
+  path: Type.String({ description: "Absolute or relative file path to write" }),
+  content: Type.String({ description: "Content to write to the file" }),
+});
+
+export const writeFileTool: AgentTool<typeof Params> = {
+  name: "write_file",
+  label: "Write File",
+  description:
+    "Write content to a file. Path must be within allowed directories. Sensitive paths are blocked.",
+  parameters: Params,
+  execute: async (_toolCallId, params: Static<typeof Params>) => {
+    const filePath = params.path;
 
     if (!isPathAllowed(filePath)) {
-      return `⛔ Access denied: path "${filePath}" is outside allowed directories or is a sensitive file.`;
+      throw new Error(
+        `Access denied: path "${filePath}" is outside allowed directories or is a sensitive file.`
+      );
     }
 
-    try {
-      await mkdir(dirname(filePath), { recursive: true });
-      await writeFile(filePath, input.content as string, "utf-8");
-      return `File written: ${filePath}`;
-    } catch (err) {
-      return `Error writing file: ${(err as Error).message}`;
-    }
+    await mkdir(dirname(filePath), { recursive: true });
+    await writeFile(filePath, params.content, "utf-8");
+    return {
+      content: [{ type: "text", text: `File written: ${filePath}` }],
+      details: { path: filePath, bytes: params.content.length },
+    };
   },
 };

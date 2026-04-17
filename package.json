@@ -13,6 +13,9 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
+    "@mariozechner/pi-agent-core": "^0.67.6",
+    "@mariozechner/pi-ai": "^0.67.6",
+    "@sinclair/typebox": "^0.34.49",
     "dotenv": "^16.4.7",
     "grammy": "^1.35.0"
   },

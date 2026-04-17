@@ -1,44 +1,39 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
+import { Type, type Static } from "@sinclair/typebox";
+import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { config } from "../config.js";
 import { isPathAllowed } from "../safety.js";
-import type { ToolHandler } from "./registry.js";
 
-export const acpTool: ToolHandler = {
-  definition: {
-    name: "acp",
-    description:
-      "Spawn a Claude Code session via ACP for complex coding tasks. Runs with --approve-reads and restricted to allowed directories. Timeout: 3 minutes by default.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        task: {
-          type: "string",
-          description: "The task description for the Claude Code agent",
-        },
-        cwd: {
-          type: "string",
-          description:
-            "Working directory for the agent (must be within allowed paths)",
-        },
-      },
-      required: ["task"],
-    },
-  },
-  execute: async (input) => {
-    const task = input.task as string;
-    const cwd = resolve((input.cwd as string) || config.acpDefaultCwd);
+const Params = Type.Object({
+  task: Type.String({ description: "The task description for the Claude Code agent" }),
+  cwd: Type.Optional(
+    Type.String({
+      description: "Working directory for the agent (must be within allowed paths)",
+    })
+  ),
+});
+
+export const acpTool: AgentTool<typeof Params> = {
+  name: "acp",
+  label: "Claude Code (ACP)",
+  description:
+    "Spawn a Claude Code session via ACP for complex coding tasks. Runs with --approve-reads and restricted to allowed directories. Timeout: 3 minutes by default.",
+  parameters: Params,
+  execute: async (_toolCallId, params: Static<typeof Params>, signal) => {
+    const task = params.task;
+    const cwd = resolve(params.cwd ?? config.acpDefaultCwd);
 
     if (!isPathAllowed(cwd)) {
-      return `⛔ Access denied: working directory "${cwd}" is outside allowed paths.`;
+      throw new Error(
+        `Access denied: working directory "${cwd}" is outside allowed paths.`
+      );
     }
-
-    // Sanitize: block obvious prompt injection in task
     if (task.length > 4000) {
-      return "⛔ Task description too long (max 4000 chars).";
+      throw new Error("Task description too long (max 4000 chars).");
     }
 
-    return new Promise((resolve) => {
+    return new Promise((resolveResult) => {
       const chunks: Buffer[] = [];
       const errChunks: Buffer[] = [];
 
@@ -53,17 +48,17 @@ export const acpTool: ToolHandler = {
 
       const timeout = setTimeout(() => {
         child.kill("SIGTERM");
-        resolve(
-          `[ACP timed out after ${config.acpTimeoutMs / 1000}s]`
-        );
       }, config.acpTimeoutMs);
+
+      signal?.addEventListener("abort", () => child.kill("SIGTERM"), {
+        once: true,
+      });
 
       child.on("close", (code) => {
         clearTimeout(timeout);
         const stdout = Buffer.concat(chunks).toString();
         const stderr = Buffer.concat(errChunks).toString();
         const parts: string[] = [];
-        // Truncate to prevent token explosion
         const maxOut = 8000;
         if (stdout)
           parts.push(
@@ -76,12 +71,16 @@ export const acpTool: ToolHandler = {
             `stderr:\n${stderr.length > maxOut ? stderr.slice(0, maxOut) + "\n...[truncated]" : stderr}`
           );
         if (code !== 0) parts.push(`exit code: ${code}`);
-        resolve(parts.join("\n") || "(no output)");
+        const text = parts.join("\n") || "(no output)";
+        resolveResult({ content: [{ type: "text", text }], details: { code } });
       });
 
       child.on("error", (err) => {
         clearTimeout(timeout);
-        resolve(`Error spawning acp: ${(err as Error).message}`);
+        resolveResult({
+          content: [{ type: "text", text: `Error spawning acp: ${err.message}` }],
+          details: { error: err.message },
+        });
       });
     });
   },
